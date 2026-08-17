@@ -33,9 +33,38 @@
   
 
   const markers = [];
-  let pending = null;
+  let queued = null;
+  const soon = (fn) => (typeof queueMicrotask === 'function'
+    ? queueMicrotask(fn) : Promise.resolve().then(fn));
+
+  let bin = null;
+
+  const isMarker = (c) => !!c && !!c.playerText && !c.usernameText;
+
+  function classify() {
+    const list = queued;
+    queued = null;
+    if (!list) return;
+    for (let i = 0; i < list.length; i++) {
+      const c = list[i];
+      if (!isMarker(c)) continue;
+      if (c.parent) bin = c.parent;
+      if (markers.indexOf(c) === -1) markers.push(c);
+    }
+    applyMarkers();
+  }
+
+  function sweep() {
+    if (!bin || !bin.children) return;
+    const kids = bin.children;
+    for (let i = 0; i < kids.length; i++) {
+      const c = kids[i];
+      if (isMarker(c) && markers.indexOf(c) === -1) markers.push(c);
+    }
+  }
 
   function applyMarkers() {
+    sweep();
     const a = st.mates / 100;
     for (let i = markers.length - 1; i >= 0; i--) {
       const m = markers[i];
@@ -54,15 +83,11 @@
     if (typeof orig !== 'function') return false;
     const wrapped = function () {
       const r = orig.apply(this, arguments);
-      const a = st.mates / 100;
       for (let i = 0; i < arguments.length; i++) {
         const c = arguments[i];
-        if (!c) continue;
-        if (c.playerId !== undefined) {
-          markers.push(c); pending = c; c.alpha = a;
-        } else if (pending && pending.playerText === c) {
-          c.alpha = a; pending = null;
-        }
+        if (!c || c.playerId === undefined) continue;
+        if (!queued) { queued = []; soon(classify); }
+        queued.push(c);
       }
       return r;
     };
@@ -152,6 +177,17 @@
 
   window.__deflyOpacity = {
     get values() { return { fps: st.fps, mates: st.mates }; },
+    get status() {
+      const P = window.PIXI;
+      return {
+        fps: st.fps,
+        mates: st.mates,
+        hooked: !!(P && P.Container && P.Container.prototype.addChild &&
+                   P.Container.prototype.addChild.__dfoOrig),
+        tracked: markers.filter(m => m && m.parent).length,
+        container: !!bin
+      };
+    },
     set(key, pct) { if (key in st) { st[key] = clamp(pct); commit(); sync(); } },
     remove() {
       clearInterval(retry);
